@@ -127,3 +127,102 @@ def test_non_positive_transaction_amount_is_rejected(tmp_path):
 
     finally:
         test_engine.dispose()
+
+def test_duplicate_category_name_and_type_is_rejected(tmp_path):
+    """Reject two categories with the same name and type."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+
+            # Insert the first Food expense category.
+            connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            )
+
+            # Attempt to insert the same category again.
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(
+                        text("""
+                            INSERT INTO categories (
+                                name, category_type, is_active
+                            )
+                            VALUES ('Food', 'EXPENSE', 1)
+                        """)
+                    )
+
+    finally:
+        test_engine.dispose()
+
+
+def test_same_category_name_with_different_types_is_allowed(tmp_path):
+    """Allow the same category name for income and expenses."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+
+            connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Other', 'EXPENSE', 1)
+                """)
+            )
+
+            connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Other', 'INCOME', 1)
+                """)
+            )
+
+            result = connection.execute(
+                text("SELECT COUNT(*) FROM categories WHERE name = 'Other'")
+            ).scalar()
+
+            assert result == 2
+
+    finally:
+        test_engine.dispose()
+
+
+def test_different_category_names_with_same_type_are_allowed(tmp_path):
+    """Allow different expense category names."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+
+            connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            )
+
+            connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Transport', 'EXPENSE', 1)
+                """)
+            )
+
+            result = connection.execute(
+                text("""
+                    SELECT COUNT(*)
+                    FROM categories
+                    WHERE category_type = 'EXPENSE'
+                """)
+            ).scalar()
+
+            assert result == 2
+
+    finally:
+        test_engine.dispose()
