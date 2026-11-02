@@ -1,9 +1,8 @@
 
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
-
 
 # Find the main SpendWise project directory.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,6 +23,13 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     echo=False
 )
+
+# Enable foreign-key enforcement for every SQLite connection.
+@event.listens_for(engine, "connect")
+def enable_foreign_keys(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 # Base class for all database models.
