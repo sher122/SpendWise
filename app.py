@@ -10,11 +10,13 @@ from models.category import Category, CategoryType
 from models.subcategory import Subcategory
 from models.transaction import PaymentMethod, Transaction, TransactionType
 from services.category_service import seed_default_categories
-from services.transaction_service import (
-    create_transaction,
-    get_transactions,
-    delete_transaction,
-    update_transaction,
+from services.category_service import (
+    seed_default_categories,
+    create_category,
+    create_subcategory,
+    update_category,
+    update_subcategory,
+    
 )
 
 # --------------------------------------------------
@@ -49,6 +51,7 @@ page = st.sidebar.radio(
     "Dashboard",
     "Transactions",
     "Transaction History",
+    "Manage Categories",
     "Budgets",
     "Reports",
 ],
@@ -640,7 +643,246 @@ elif page == "Transaction History":
         )
 
 
+# --------------------------------------------------
+# Manage Categories
+# --------------------------------------------------
 
+elif page == "Manage Categories":
+
+    st.header("Manage Categories")
+    st.write(
+        "Create, rename and deactivate your income and expense categories."
+    )
+
+    # CREATE CATEGORY
+    st.subheader("Create a Category")
+
+    with st.form("create_category_form"):
+        new_category_name = st.text_input(
+            "Category name",
+            max_chars=100,
+        )
+
+        new_category_type_label = st.selectbox(
+            "Category type",
+            ["Expense", "Income"],
+        )
+
+        create_category_button = st.form_submit_button(
+            "Create Category",
+            type="primary",
+        )
+
+    if create_category_button:
+        try:
+            selected_type = (
+                CategoryType.EXPENSE
+                if new_category_type_label == "Expense"
+                else CategoryType.INCOME
+            )
+
+            with SessionLocal() as session:
+                create_category(
+                    session,
+                    new_category_name,
+                    selected_type,
+                )
+                session.commit()
+
+            st.success("Category created successfully!")
+            st.rerun()
+
+        except ValueError as error:
+            st.error(str(error))
+
+        except Exception:
+            st.error("Unable to create the category. Please try again.")
+
+    st.divider()
+
+    # LOAD ACTIVE CATEGORIES
+    with SessionLocal() as session:
+        active_categories = session.scalars(
+            select(Category)
+            .where(Category.is_active.is_(True))
+            .order_by(Category.name)
+        ).all()
+
+        category_data = [
+            {
+                "id": item.id,
+                "name": item.name,
+                "type": item.category_type.value.title(),
+            }
+            for item in active_categories
+        ]
+
+    st.subheader("Active Categories")
+
+    if category_data:
+        st.dataframe(
+            category_data,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No active categories available.")
+
+    st.divider()
+
+    # CREATE SUBCATEGORY
+    st.subheader("Create a Subcategory")
+
+    if active_categories:
+        category_lookup = {
+            item.id: item for item in active_categories
+        }
+
+        with st.form("create_subcategory_form"):
+            parent_category_id = st.selectbox(
+                "Parent category",
+                list(category_lookup.keys()),
+                format_func=lambda item: category_lookup[item].name,
+            )
+
+            new_subcategory_name = st.text_input(
+                "Subcategory name",
+                max_chars=100,
+            )
+
+            create_subcategory_button = st.form_submit_button(
+                "Create Subcategory",
+                type="primary",
+            )
+
+        if create_subcategory_button:
+            try:
+                with SessionLocal() as session:
+                    create_subcategory(
+                        session,
+                        new_subcategory_name,
+                        parent_category_id,
+                    )
+                    session.commit()
+
+                st.success("Subcategory created successfully!")
+                st.rerun()
+
+            except ValueError as error:
+                st.error(str(error))
+
+            except Exception:
+                st.error(
+                    "Unable to create the subcategory. Please try again."
+                )
+    else:
+        st.info("Create an active category before adding subcategories.")
+
+    st.divider()
+
+    # RENAME CATEGORY
+    st.subheader("Rename a Category")
+
+    if active_categories:
+        with st.form("rename_category_form"):
+            rename_category_id = st.selectbox(
+                "Select category to rename",
+                list(category_lookup.keys()),
+                format_func=lambda item: category_lookup[item].name,
+            )
+
+            renamed_category = st.text_input(
+                "New category name",
+                max_chars=100,
+            )
+
+            rename_category_button = st.form_submit_button(
+                "Rename Category",
+            )
+
+        if rename_category_button:
+            try:
+                with SessionLocal() as session:
+                    update_category(
+                        session,
+                        rename_category_id,
+                        renamed_category,
+                    )
+                    session.commit()
+
+                st.success("Category renamed successfully!")
+                st.rerun()
+
+            except ValueError as error:
+                st.error(str(error))
+
+            except Exception:
+                st.error("Unable to rename the category.")
+    else:
+        st.info("No active categories available to rename.")
+
+    st.divider()
+
+    # RENAME SUBCATEGORY
+    st.subheader("Rename a Subcategory")
+
+    with SessionLocal() as session:
+        active_subcategories = session.scalars(
+            select(Subcategory)
+            .join(Category)
+            .where(
+                Subcategory.is_active.is_(True),
+                Category.is_active.is_(True),
+            )
+            .order_by(Subcategory.name)
+        ).all()
+
+        subcategory_data = {
+            item.id: f"{item.name} — {item.category.name}"
+            for item in active_subcategories
+        }
+
+    if active_subcategories:
+        with st.form("rename_subcategory_form"):
+            rename_subcategory_id = st.selectbox(
+                "Select subcategory",
+                list(subcategory_data.keys()),
+                format_func=lambda item: subcategory_data[item],
+            )
+
+            renamed_subcategory = st.text_input(
+                "New subcategory name",
+                max_chars=100,
+            )
+
+            rename_subcategory_button = st.form_submit_button(
+                "Rename Subcategory",
+            )
+
+        if rename_subcategory_button:
+            try:
+                with SessionLocal() as session:
+                    update_subcategory(
+                        session,
+                        rename_subcategory_id,
+                        renamed_subcategory,
+                    )
+                    session.commit()
+
+                st.success("Subcategory renamed successfully!")
+                st.rerun()
+
+            except ValueError as error:
+                st.error(str(error))
+
+            except Exception:
+                st.error("Unable to rename the subcategory.")
+    else:
+        st.info("No active subcategories available.")
+
+    st.divider()
+
+   
 # --------------------------------------------------
 # Budgets
 # --------------------------------------------------
