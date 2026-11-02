@@ -7,8 +7,8 @@ It does not contain Streamlit UI code.
 
 from datetime import date
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from models.category import Category, CategoryType
 from models.subcategory import Subcategory
 from models.transaction import (
@@ -128,3 +128,112 @@ def create_transaction(
     session.flush()
 
     return transaction
+
+
+def get_transactions(
+    session: Session,
+    transaction_type: TransactionType | None = None,
+    category_id: int | None = None,
+    payment_method: PaymentMethod | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    search_text: str | None = None,
+    sort_by: str = "date",
+    descending: bool = True,
+) -> list[Transaction]:
+    """
+    Retrieve transactions with optional filters and sorting.
+
+    Args:
+        session: Active SQLAlchemy database session.
+        transaction_type: Optional income or expense filter.
+        category_id: Optional category filter.
+        payment_method: Optional payment method filter.
+        start_date: Optional beginning date (inclusive).
+        end_date: Optional ending date (inclusive).
+        search_text: Optional description search.
+        sort_by: Sort by 'date', 'amount', or 'description'.
+        descending: Whether to sort in descending order.
+
+    Returns:
+        A list of matching transactions.
+    """
+
+    if transaction_type is not None and not isinstance(
+        transaction_type, TransactionType
+    ):
+        raise ValueError("Invalid transaction type.")
+
+    if payment_method is not None and not isinstance(
+        payment_method, PaymentMethod
+    ):
+        raise ValueError("Invalid payment method.")
+
+    if start_date is not None and not isinstance(start_date, date):
+        raise ValueError("Invalid start date.")
+
+    if end_date is not None and not isinstance(end_date, date):
+        raise ValueError("Invalid end date.")
+
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("Start date cannot be after end date.")
+
+    sort_columns = {
+        "date": Transaction.transaction_date,
+        "amount": Transaction.amount_paise,
+        "description": Transaction.description,
+    }
+
+    if sort_by not in sort_columns:
+        raise ValueError("Invalid sorting option.")
+
+    statement = select(Transaction)
+
+    # Apply optional filters.
+    if transaction_type is not None:
+        statement = statement.where(
+            Transaction.transaction_type == transaction_type
+        )
+
+    if category_id is not None:
+        statement = statement.where(
+            Transaction.category_id == category_id
+        )
+
+    if payment_method is not None:
+        statement = statement.where(
+            Transaction.payment_method == payment_method
+        )
+
+    if start_date is not None:
+        statement = statement.where(
+            Transaction.transaction_date >= start_date
+        )
+
+    if end_date is not None:
+        statement = statement.where(
+            Transaction.transaction_date <= end_date
+        )
+
+    if search_text and search_text.strip():
+        statement = statement.where(
+            Transaction.description.ilike(
+                f"%{search_text.strip()}%"
+            )
+        )
+
+    # Apply sorting.
+    sort_column = sort_columns[sort_by]
+
+    if descending:
+        statement = statement.order_by(
+            sort_column.desc(),
+            Transaction.id.desc(),
+        )
+    else:
+        statement = statement.order_by(
+            sort_column.asc(),
+            Transaction.id.asc(),
+        )
+
+    return list(session.scalars(statement).all())
