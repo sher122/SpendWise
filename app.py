@@ -10,8 +10,12 @@ from models.category import Category, CategoryType
 from models.subcategory import Subcategory
 from models.transaction import PaymentMethod, Transaction, TransactionType
 from services.category_service import seed_default_categories
-from services.transaction_service import create_transaction
-
+from services.transaction_service import (
+    create_transaction,
+    get_transactions,
+    delete_transaction,
+    update_transaction,
+)
 
 # --------------------------------------------------
 # Database initialization
@@ -41,7 +45,13 @@ st.sidebar.title("SpendWise")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Dashboard", "Transactions", "Budgets", "Reports"],
+    [
+    "Dashboard",
+    "Transactions",
+    "Transaction History",
+    "Budgets",
+    "Reports",
+],
 )
 
 
@@ -243,6 +253,393 @@ elif page == "Transactions":
                     "Something went wrong while saving the transaction. "
                     "Please try again."
                 )
+
+
+# --------------------------------------------------
+# Transaction History
+# --------------------------------------------------
+
+elif page == "Transaction History":
+
+    st.header("Transaction History")
+    st.write("View, search, filter and sort your saved transactions.")
+
+    # Load categories for the category filter.
+    with SessionLocal() as session:
+        categories = session.scalars(
+            select(Category).order_by(Category.name)
+        ).all()
+
+    # Search
+    search_text = st.text_input(
+        "Search by description",
+        placeholder="Example: groceries, salary, electricity",
+    )
+
+    # Filters
+    col1, col2 = st.columns(2)
+
+    with col1:
+        type_filter = st.selectbox(
+            "Transaction type",
+            ["All", "Expense", "Income"],
+        )
+
+        category_options = [None] + categories
+
+        selected_category = st.selectbox(
+            "Category",
+            category_options,
+            format_func=lambda item: (
+                "All categories" if item is None else item.name
+            ),
+        )
+
+        start_date = st.date_input(
+            "From date",
+            value=None,
+        )
+
+    with col2:
+        payment_options = [None] + list(PaymentMethod)
+
+        selected_payment = st.selectbox(
+            "Payment method",
+            payment_options,
+            format_func=lambda item: (
+                "All payment methods"
+                if item is None
+                else item.value.replace("_", " ").title()
+            ),
+        )
+
+        sort_label = st.selectbox(
+            "Sort by",
+            ["Date", "Amount", "Description"],
+        )
+
+        sort_direction = st.selectbox(
+            "Sort order",
+            ["Newest / Highest first", "Oldest / Lowest first"],
+        )
+
+        end_date = st.date_input(
+            "To date",
+            value=None,
+        )
+
+    # Convert UI selections into service parameters.
+    selected_type = None
+
+    if type_filter == "Expense":
+        selected_type = TransactionType.EXPENSE
+    elif type_filter == "Income":
+        selected_type = TransactionType.INCOME
+
+    sort_mapping = {
+        "Date": "date",
+        "Amount": "amount",
+        "Description": "description",
+    }
+
+    descending = sort_direction == "Newest / Highest first"
+
+    
+    try:
+        with SessionLocal() as session:
+
+            transactions = get_transactions(
+                session=session,
+                transaction_type=selected_type,
+                category_id=(
+                    selected_category.id
+                    if selected_category is not None
+                    else None
+                ),
+                payment_method=selected_payment,
+                start_date=start_date,
+                end_date=end_date,
+                search_text=search_text,
+                sort_by=sort_mapping[sort_label],
+                descending=descending,
+            )
+
+            transaction_rows = []
+            transaction_options = {}
+
+            for transaction in transactions:
+
+                transaction_rows.append({
+                    "Date": transaction.transaction_date.strftime("%d %b %Y"),
+                    "Type": transaction.transaction_type.value.title(),
+                    "Description": transaction.description,
+                    "Category": transaction.category.name,
+                    "Subcategory": (
+                        transaction.subcategory.name
+                        if transaction.subcategory is not None
+                        else "-"
+                    ),
+                    "Payment Method": transaction.payment_method.value.replace(
+                        "_", " "
+                    ).title(),
+                    "Amount (₹)": transaction.amount_paise / 100,
+                })
+
+                transaction_options[transaction.id] = (
+                    f"#{transaction.id} | "
+                    f"{transaction.description} | "
+                    f"₹{transaction.amount_paise / 100:,.2f}"
+                )
+
+        st.divider()
+
+        st.subheader(f"Results: {len(transaction_rows)} transaction(s)")
+
+        if transaction_rows:
+
+            st.dataframe(
+                transaction_rows,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.divider()
+            
+            # ------------------------------------------
+            # Edit a Transaction
+            # ------------------------------------------
+
+            st.subheader("Edit a Transaction")
+
+            edit_transaction_id = st.selectbox(
+                "Select transaction to edit",
+                list(transaction_options.keys()),
+                format_func=lambda transaction_id: (
+                    transaction_options[transaction_id]
+                ),
+                key="edit_transaction_selection",
+            )
+
+            # Load the selected transaction and its related categories.
+            with SessionLocal() as session:
+                selected_transaction = session.get(
+                    Transaction,
+                    edit_transaction_id,
+                )
+
+                edit_categories = session.scalars(
+                    select(Category)
+                    .where(
+                        Category.category_type
+                        == selected_transaction.category.category_type,
+                        Category.is_active.is_(True),
+                    )
+                    .order_by(Category.name)
+                ).all()
+
+                edit_subcategories = session.scalars(
+                    select(Subcategory)
+                    .where(
+                        Subcategory.category_id
+                        == selected_transaction.category_id,
+                        Subcategory.is_active.is_(True),
+                    )
+                    .order_by(Subcategory.name)
+                ).all()
+
+                # Copy values before the session closes.
+                current_type = selected_transaction.transaction_type
+                current_amount = selected_transaction.amount_paise
+                current_description = selected_transaction.description
+                current_date = selected_transaction.transaction_date
+                current_payment = selected_transaction.payment_method
+                current_category_id = selected_transaction.category_id
+                current_subcategory_id = selected_transaction.subcategory_id
+
+            st.caption("Update the transaction details below.")
+
+            edit_category_options = {
+                category.id: category for category in edit_categories
+            }
+
+            edit_category_ids = list(edit_category_options.keys())
+
+            default_category_index = edit_category_ids.index(
+                current_category_id
+            )
+
+            edit_category_id = st.selectbox(
+                "Edit category",
+                edit_category_ids,
+                index=default_category_index,
+                format_func=lambda category_id: (
+                    edit_category_options[category_id].name
+                ),
+                key="edit_category_selection",
+            )
+
+            # Reload subcategories when the edit category changes.
+            with SessionLocal() as session:
+                edit_subcategories = session.scalars(
+                    select(Subcategory)
+                    .where(
+                        Subcategory.category_id == edit_category_id,
+                        Subcategory.is_active.is_(True),
+                    )
+                    .order_by(Subcategory.name)
+                ).all()
+
+            edit_subcategory_options = {
+                None: "None",
+                **{
+                    item.id: item.name
+                    for item in edit_subcategories
+                },
+            }
+
+            edit_subcategory_ids = list(edit_subcategory_options.keys())
+
+            default_subcategory_index = (
+                edit_subcategory_ids.index(current_subcategory_id)
+                if current_subcategory_id in edit_subcategory_ids
+                else 0
+            )
+
+            with st.form("edit_transaction_form"):
+
+                edit_amount = st.text_input(
+                    "Amount (₹)",
+                    value=f"{current_amount / 100:.2f}",
+                )
+
+                edit_description = st.text_input(
+                    "Description",
+                    value=current_description,
+                    max_chars=200,
+                )
+
+                edit_date = st.date_input(
+                    "Transaction date",
+                    value=current_date,
+                )
+
+                edit_payment = st.selectbox(
+                    "Payment method",
+                    list(PaymentMethod),
+                    index=list(PaymentMethod).index(current_payment),
+                    format_func=lambda item: (
+                        item.value.replace("_", " ").title()
+                    ),
+                )
+
+                edit_subcategory_id = st.selectbox(
+                    "Subcategory (optional)",
+                    edit_subcategory_ids,
+                    index=default_subcategory_index,
+                    format_func=lambda item: edit_subcategory_options[item],
+                )
+
+                save_edit = st.form_submit_button(
+                    "Save Changes",
+                    type="primary",
+                )
+
+            if save_edit:
+
+                try:
+                    edit_amount_decimal = Decimal(edit_amount.strip())
+
+                    if not edit_amount_decimal.is_finite():
+                        raise ValueError(
+                            "Enter a valid transaction amount."
+                        )
+
+                    edit_amount_in_paise = edit_amount_decimal * 100
+
+                    if (
+                        edit_amount_in_paise
+                        != edit_amount_in_paise.to_integral_value()
+                    ):
+                        raise ValueError(
+                            "Amount can have a maximum of two decimal places."
+                        )
+
+                    with SessionLocal() as session:
+                        update_transaction(
+                            session=session,
+                            transaction_id=edit_transaction_id,
+                            transaction_type=current_type,
+                            amount_paise=int(edit_amount_in_paise),
+                            description=edit_description,
+                            transaction_date=edit_date,
+                            payment_method=edit_payment,
+                            category_id=edit_category_id,
+                            subcategory_id=edit_subcategory_id,
+                        )
+
+                        session.commit()
+
+                    st.success("Transaction updated successfully!")
+                    st.rerun()
+
+                except (InvalidOperation, ValueError) as error:
+                    st.error(str(error))
+
+                except Exception:
+                    st.error(
+                        "Something went wrong while updating the transaction. "
+                        "Please try again."
+                    )
+
+            st.subheader("Delete a Transaction")
+
+            selected_transaction_id = st.selectbox(
+                "Select transaction to delete",
+                list(transaction_options.keys()),
+                format_func=lambda transaction_id: (
+                    transaction_options[transaction_id]
+                ),
+                key="delete_transaction_selection",
+            )
+
+            confirm_delete = st.checkbox(
+                "I confirm that I want to permanently delete this transaction.",
+                key="confirm_transaction_deletion",
+            )
+
+            if st.button(
+                "Delete Selected Transaction",
+                type="primary",
+                disabled=not confirm_delete,
+            ):
+
+                with SessionLocal() as session:
+                    delete_transaction(
+                        session,
+                        selected_transaction_id,
+                    )
+                    session.commit()
+
+                st.success("Transaction deleted successfully!")
+
+                # Clear the confirmation state after deletion.
+                st.session_state["confirm_transaction_deletion"] = False
+
+                st.rerun()
+
+        else:
+            st.info("No transactions match your selected filters.")
+
+    except ValueError as error:
+        st.error(str(error))
+
+    except Exception:
+        st.error(
+            "Unable to load or update transaction history. "
+            "Please try again."
+        )
+
+
 
 # --------------------------------------------------
 # Budgets

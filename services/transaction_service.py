@@ -237,3 +237,118 @@ def get_transactions(
         )
 
     return list(session.scalars(statement).all())
+
+
+def delete_transaction(
+    session: Session,
+    transaction_id: int,
+) -> None:
+    """
+    Delete a transaction by its ID.
+
+    The caller is responsible for committing or rolling back.
+
+    Raises:
+        ValueError: If the transaction does not exist.
+    """
+
+    transaction = session.get(Transaction, transaction_id)
+
+    if transaction is None:
+        raise ValueError("Transaction not found.")
+
+    session.delete(transaction)
+    session.flush()
+
+
+def update_transaction(
+    session: Session,
+    transaction_id: int,
+    transaction_type: TransactionType,
+    amount_paise: int,
+    description: str,
+    transaction_date: date,
+    payment_method: PaymentMethod,
+    category_id: int,
+    subcategory_id: int | None = None,
+) -> Transaction:
+    """
+    Update an existing transaction after validating its details.
+
+    The caller is responsible for committing or rolling back.
+    """
+
+    transaction = session.get(Transaction, transaction_id)
+
+    if transaction is None:
+        raise ValueError("Transaction not found.")
+
+    # Validate transaction type.
+    if not isinstance(transaction_type, TransactionType):
+        raise ValueError("Invalid transaction type.")
+
+    # Validate amount.
+    if isinstance(amount_paise, bool) or not isinstance(amount_paise, int):
+        raise ValueError("Amount must be a whole number of paise.")
+
+    if amount_paise <= 0:
+        raise ValueError("Amount must be greater than zero.")
+
+    # Validate description.
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("Description cannot be empty.")
+
+    description = description.strip()
+
+    if len(description) > 200:
+        raise ValueError("Description cannot exceed 200 characters.")
+
+    # Validate date and payment method.
+    if not isinstance(transaction_date, date):
+        raise ValueError("Invalid transaction date.")
+
+    if not isinstance(payment_method, PaymentMethod):
+        raise ValueError("Invalid payment method.")
+
+    # Validate category.
+    category = session.get(Category, category_id)
+
+    if category is None:
+        raise ValueError("Selected category does not exist.")
+
+    if not category.is_active:
+        raise ValueError("Selected category is inactive.")
+
+    if category.category_type.value != transaction_type.value:
+        raise ValueError(
+            "Selected category does not match the transaction type."
+        )
+
+    # Validate optional subcategory.
+    if subcategory_id is not None:
+        subcategory = session.get(Subcategory, subcategory_id)
+
+        if subcategory is None:
+            raise ValueError("Selected subcategory does not exist.")
+
+        if not subcategory.is_active:
+            raise ValueError("Selected subcategory is inactive.")
+
+        if subcategory.category_id != category_id:
+            raise ValueError(
+                "Selected subcategory does not belong to this category."
+            )
+
+    # Update the existing database object.
+    transaction.transaction_type = transaction_type
+    transaction.amount_paise = amount_paise
+    transaction.description = description
+    transaction.transaction_date = transaction_date
+    transaction.payment_method = payment_method
+    transaction.category_id = category_id
+    transaction.subcategory_id = subcategory_id
+
+    session.flush()
+
+    return transaction
+
