@@ -75,3 +75,55 @@ def test_invalid_category_reference_is_rejected(tmp_path):
 
     finally:
         test_engine.dispose()
+
+def test_non_positive_transaction_amount_is_rejected(tmp_path):
+    """Verify that zero and negative transaction amounts are rejected."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+
+            # Create a valid category first.
+            result = connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            )
+
+            category_id = result.lastrowid
+
+            # Try inserting zero and negative amounts.
+            for invalid_amount in (0, -100):
+                with pytest.raises(IntegrityError):
+                    with connection.begin_nested():
+                        connection.execute(
+                            text("""
+                                INSERT INTO transactions (
+                                    transaction_type,
+                                    amount_paise,
+                                    description,
+                                    transaction_date,
+                                    payment_method,
+                                    category_id,
+                                    subcategory_id
+                                )
+                                VALUES (
+                                    'EXPENSE',
+                                    :amount,
+                                    'Invalid transaction',
+                                    '2026-11-02',
+                                    'CASH',
+                                    :category_id,
+                                    NULL
+                                )
+                            """),
+                            {
+                                "amount": invalid_amount,
+                                "category_id": category_id,
+                            },
+                        )
+
+    finally:
+        test_engine.dispose()
