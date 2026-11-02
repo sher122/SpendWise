@@ -1,0 +1,19 @@
+# Python virtual environment
+.venv/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Pytest cache
+.pytest_cache/
+
+# Local SQLite databases
+data/*.db
+data/*.db-*
+
+# Environment variables and secrets
+.env
+
+# VS Code local settings
+.vscode/

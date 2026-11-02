@@ -41,4 +41,8 @@ SessionLocal = sessionmaker(
 
 # Initialize the database tables.
 def init_db():
+    # Import all models so SQLAlchemy registers their tables.
+    import models  # noqa: F401
+
+    # Create database tables that do not already exist.
     Base.metadata.create_all(bind=engine)
