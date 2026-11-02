@@ -1,4 +1,10 @@
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import (
+    Boolean,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.database import Base
@@ -6,6 +12,13 @@ from database.database import Base
 
 class Subcategory(Base):
     __tablename__ = "subcategories"
+    __table_args__ = (
+        UniqueConstraint(
+            "name",
+            "category_id",
+            name="uq_subcategory_name_category",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,

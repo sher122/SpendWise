@@ -226,3 +226,130 @@ def test_different_category_names_with_same_type_are_allowed(tmp_path):
 
     finally:
         test_engine.dispose()
+
+def test_duplicate_subcategory_in_same_category_is_rejected(tmp_path):
+    """Reject duplicate subcategory names under the same category."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+            result = connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            )
+            category_id = result.lastrowid
+
+            connection.execute(
+                text("""
+                    INSERT INTO subcategories (name, category_id, is_active)
+                    VALUES ('Groceries', :category_id, 1)
+                """),
+                {"category_id": category_id},
+            )
+
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(
+                        text("""
+                            INSERT INTO subcategories (
+                                name, category_id, is_active
+                            )
+                            VALUES ('Groceries', :category_id, 1)
+                        """),
+                        {"category_id": category_id},
+                    )
+
+    finally:
+        test_engine.dispose()
+
+
+def test_same_subcategory_name_in_different_categories_is_allowed(tmp_path):
+    """Allow the same subcategory name under different categories."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+            food_id = connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            ).lastrowid
+
+            shopping_id = connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Shopping', 'EXPENSE', 1)
+                """)
+            ).lastrowid
+
+            for category_id in (food_id, shopping_id):
+                connection.execute(
+                    text("""
+                        INSERT INTO subcategories (
+                            name, category_id, is_active
+                        )
+                        VALUES ('Other', :category_id, 1)
+                    """),
+                    {"category_id": category_id},
+                )
+
+            result = connection.execute(
+                text("""
+                    SELECT COUNT(*)
+                    FROM subcategories
+                    WHERE name = 'Other'
+                """)
+            ).scalar()
+
+            assert result == 2
+
+    finally:
+        test_engine.dispose()
+
+
+def test_different_subcategories_in_same_category_are_allowed(tmp_path):
+    """Allow different subcategory names under the same category."""
+
+    test_engine = create_test_engine(tmp_path)
+
+    try:
+        with test_engine.begin() as connection:
+            category_id = connection.execute(
+                text("""
+                    INSERT INTO categories (name, category_type, is_active)
+                    VALUES ('Food', 'EXPENSE', 1)
+                """)
+            ).lastrowid
+
+            for name in ("Groceries", "Eating Out"):
+                connection.execute(
+                    text("""
+                        INSERT INTO subcategories (
+                            name, category_id, is_active
+                        )
+                        VALUES (:name, :category_id, 1)
+                    """),
+                    {
+                        "name": name,
+                        "category_id": category_id,
+                    },
+                )
+
+            result = connection.execute(
+                text("""
+                    SELECT COUNT(*)
+                    FROM subcategories
+                    WHERE category_id = :category_id
+                """),
+                {"category_id": category_id},
+            ).scalar()
+
+            assert result == 2
+
+    finally:
+        test_engine.dispose()
