@@ -1149,21 +1149,3 @@ elif page == "Manage Categories":
     st.divider()
 
    
-# --------------------------------------------------
-# Budgets
-# --------------------------------------------------
-
-elif page == "Budgets":
-
-    st.header("Budgets")
-    st.info("Budget management is coming soon.")
-
-
-# --------------------------------------------------
-# Reports
-# --------------------------------------------------
-
-elif page == "Reports":
-
-    st.header("Reports")
-    st.info("Financial reports are coming soon.")
