@@ -3,6 +3,9 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+
 from sqlalchemy import func, select
 
 from database.database import SessionLocal, init_db
@@ -17,6 +20,13 @@ from services.category_service import (
     update_category,
     update_subcategory,
     
+)
+
+from services.transaction_service import (
+    create_transaction,
+    get_transactions,
+    delete_transaction,
+    update_transaction,
 )
 
 # --------------------------------------------------
@@ -65,47 +75,303 @@ page = st.sidebar.radio(
 if page == "Dashboard":
 
     st.header("Financial Overview")
-    st.write("Your financial summary based on saved transactions.")
+    st.write(
+        "Understand your income, expenses, savings and spending patterns."
+    )
 
     with SessionLocal() as session:
 
-        income = session.scalar(
-            select(func.coalesce(func.sum(Transaction.amount_paise), 0))
-            .where(Transaction.transaction_type == TransactionType.INCOME)
+        # ------------------------------------------
+        # 1. FINANCIAL SUMMARY
+        # ------------------------------------------
+
+        income_paise = session.scalar(
+            select(
+                func.coalesce(func.sum(Transaction.amount_paise), 0)
+            ).where(
+                Transaction.transaction_type == TransactionType.INCOME
+            )
         )
 
-        expenses = session.scalar(
-            select(func.coalesce(func.sum(Transaction.amount_paise), 0))
-            .where(Transaction.transaction_type == TransactionType.EXPENSE)
+        expenses_paise = session.scalar(
+            select(
+                func.coalesce(func.sum(Transaction.amount_paise), 0)
+            ).where(
+                Transaction.transaction_type == TransactionType.EXPENSE
+            )
         )
-
-        income_rupees = income / 100
-        expenses_rupees = expenses / 100
-        balance_rupees = income_rupees - expenses_rupees
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("Total Income", f"₹{income_rupees:,.2f}")
-        col2.metric("Total Expenses", f"₹{expenses_rupees:,.2f}")
-        col3.metric("Remaining Balance", f"₹{balance_rupees:,.2f}")
-
-        st.divider()
-
-        st.subheader("Getting started")
 
         transaction_count = session.scalar(
             select(func.count()).select_from(Transaction)
         )
 
-        if transaction_count == 0:
-            st.info(
-                "No transactions yet. Open Transactions to record "
-                "your first income or expense."
+        # ------------------------------------------
+        # 2. CATEGORY-WISE EXPENSES
+        # ------------------------------------------
+
+        category_rows = session.execute(
+            select(
+                Category.name,
+                func.sum(Transaction.amount_paise).label("total"),
             )
-        else:
-            st.success(
-                f"You have recorded {transaction_count} transaction(s)."
+            .join(Transaction, Transaction.category_id == Category.id)
+            .where(
+                Transaction.transaction_type == TransactionType.EXPENSE
             )
+            .group_by(Category.id, Category.name)
+            .order_by(func.sum(Transaction.amount_paise).desc())
+        ).all()
+
+        # ------------------------------------------
+        # 3. MONTHLY INCOME AND EXPENSES
+        # ------------------------------------------
+
+        month_expression = func.strftime(
+            "%Y-%m",
+            Transaction.transaction_date,
+        )
+
+        monthly_rows = session.execute(
+            select(
+                month_expression.label("month"),
+                Transaction.transaction_type,
+                func.sum(Transaction.amount_paise).label("total"),
+            )
+            .group_by(
+                month_expression,
+                Transaction.transaction_type,
+            )
+            .order_by(month_expression)
+        ).all()
+
+    # ------------------------------------------
+    # DISPLAY FINANCIAL KPIs
+    # ------------------------------------------
+
+    income_rupees = income_paise / 100
+    expenses_rupees = expenses_paise / 100
+    balance_rupees = income_rupees - expenses_rupees
+
+    # Savings rate = (Income - Expenses) / Income * 100
+    savings_rate = (
+        (income_paise - expenses_paise) / income_paise * 100
+        if income_paise > 0
+        else 0
+    )
+
+    st.subheader("Financial Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Total Income",
+        f"₹{income_rupees:,.2f}",
+    )
+
+    col2.metric(
+        "Total Expenses",
+        f"₹{expenses_rupees:,.2f}",
+    )
+
+    col3.metric(
+        "Remaining Balance",
+        f"₹{balance_rupees:,.2f}",
+    )
+
+    col4.metric(
+        "Savings Rate",
+        f"{savings_rate:.2f}%",
+        help="Percentage of recorded income remaining after expenses.",
+    )
+
+    st.caption(
+        f"Based on {transaction_count} recorded transaction(s)."
+    )
+
+    if income_paise == 0:
+        st.info(
+            "Add income transactions to calculate a meaningful savings rate."
+        )
+
+    st.divider()
+
+    # ------------------------------------------
+    # MONTHLY INCOME VS EXPENSE CHART
+    # ------------------------------------------
+
+    st.subheader("Monthly Income vs Expenses")
+
+    monthly_chart_data = [
+        {
+            "Month": row.month,
+            "Type": row.transaction_type.value.title(),
+            "Amount": row.total / 100,
+        }
+        for row in monthly_rows
+    ]
+
+    if monthly_chart_data:
+
+        monthly_df = pd.DataFrame(monthly_chart_data)
+
+        monthly_figure = px.bar(
+            monthly_df,
+            x="Month",
+            y="Amount",
+            color="Type",
+            barmode="group",
+            title="Monthly Financial Performance",
+            labels={
+                "Month": "Month",
+                "Amount": "Amount (₹)",
+                "Type": "Transaction Type",
+            },
+        )
+
+        monthly_figure.update_layout(
+            xaxis_title="Month",
+            yaxis_title="Amount (₹)",
+            legend_title="Transaction Type",
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(
+            monthly_figure,
+            use_container_width=True,
+        )
+
+    else:
+        st.info(
+            "Add transactions to see your monthly financial performance."
+        )
+
+    st.divider()
+
+    # ------------------------------------------
+    # CATEGORY-WISE EXPENSE BREAKDOWN
+    # ------------------------------------------
+
+    st.subheader("Expense Breakdown by Category")
+
+    category_chart_data = [
+        {
+            "Category": row.name,
+            "Amount": row.total / 100,
+        }
+        for row in category_rows
+    ]
+
+    if category_chart_data:
+
+        category_df = pd.DataFrame(category_chart_data)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            category_figure = px.pie(
+                category_df,
+                names="Category",
+                values="Amount",
+                hole=0.5,
+                title="Where Your Money Goes",
+            )
+
+            category_figure.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+            )
+
+            st.plotly_chart(
+                category_figure,
+                use_container_width=True,
+            )
+
+        # ------------------------------------------
+        # TOP FIVE SPENDING CATEGORIES
+        # ------------------------------------------
+
+        with col2:
+
+            st.subheader("Top 5 Spending Categories")
+
+            top_categories_df = (
+                category_df
+                .head(5)
+                .sort_values("Amount", ascending=True)
+            )
+
+            top_figure = px.bar(
+                top_categories_df,
+                x="Amount",
+                y="Category",
+                orientation="h",
+                title="Highest Expense Categories",
+                labels={
+                    "Amount": "Amount (₹)",
+                    "Category": "Category",
+                },
+                text="Amount",
+            )
+
+            top_figure.update_traces(
+                texttemplate="₹%{text:,.2f}",
+                textposition="outside",
+            )
+
+            top_figure.update_layout(
+                yaxis_title="",
+                xaxis_title="Amount (₹)",
+            )
+
+            st.plotly_chart(
+                top_figure,
+                use_container_width=True,
+            )
+
+        # Category-wise numerical summary.
+        st.subheader("Category Spending Details")
+
+        display_category_df = category_df.copy()
+
+        display_category_df["Amount"] = (
+            display_category_df["Amount"].map(
+                lambda amount: f"₹{amount:,.2f}"
+            )
+        )
+
+        st.dataframe(
+            display_category_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    else:
+        st.info(
+            "No expense transactions available for category analysis."
+        )
+
+    st.divider()
+
+    # ------------------------------------------
+    # GETTING STARTED
+    # ------------------------------------------
+
+    st.subheader("Getting Started")
+
+    if transaction_count == 0:
+
+        st.info(
+            "No transactions yet. Open Transactions to record "
+            "your first income or expense."
+        )
+
+    else:
+
+        st.success(
+            f"SpendWise currently contains {transaction_count} "
+            "recorded transaction(s)."
+        )
 
 
 # --------------------------------------------------
@@ -251,11 +517,11 @@ elif page == "Transactions":
             except (InvalidOperation, ValueError) as error:
                 st.error(str(error))
 
-            except Exception:
+            except Exception as error:
                 st.error(
-                    "Something went wrong while saving the transaction. "
-                    "Please try again."
+                    f"Transaction save failed: {type(error).__name__}: {error}"
                 )
+                st.exception(error)
 
 
 # --------------------------------------------------
@@ -588,11 +854,11 @@ elif page == "Transaction History":
                 except (InvalidOperation, ValueError) as error:
                     st.error(str(error))
 
-                except Exception:
+                except Exception as error:
                     st.error(
-                        "Something went wrong while updating the transaction. "
-                        "Please try again."
+                        f"Transaction history failed: {type(error).__name__}: {error}"
                     )
+                    st.exception(error)
 
             st.subheader("Delete a Transaction")
 
